@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed May  6 00:19:48 2020
-
-@author: EJMorales
-
 Class will handle the images in terms of folders
 
 Moves images to train, test, val folders as needed
 
 Separates images *DM.jpg and *CM.jpg
 """
+
 import fnmatch
 import glob
 import os
@@ -24,10 +21,6 @@ import PIL
 from matplotlib import pyplot as plt
 
 
-#folder_source = 'images//1.20.21 Masks'
-#file_types = ['jpg', 'png']
-#folder_dest_cm = 'images//1.20.21 Masks CM'
-#folder_dest_dm = 'images//1.20.21 Masks DM'
 def mask_seperator(folder_source, file_types, folder_dest_cm, folder_dest_dm):
 
     folder_dest = [folder_dest_cm, folder_dest_dm]

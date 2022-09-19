@@ -1,8 +1,6 @@
 # coding: utf-8
 """
-Created on Mon Jun 15 17:36:11 2020
 
-@author: EJMorales
 """
 import segmentation_models as sm
 

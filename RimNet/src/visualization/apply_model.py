@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Mar 10 00:45:34 2021
-
-@author: EJMorales
-
 Applies the model to the images and display the results in a 2x4 image
 raw image : true disk : true cup : true rim
           : pred disk : pred cup : pred rim

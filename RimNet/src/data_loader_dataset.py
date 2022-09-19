@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jun 17 09:19:28 2020
-
-@author: EJMorales
-
 Modified version of dataloader from:
     https://github.com/HasnainRaz/SemSegPipeline
 
