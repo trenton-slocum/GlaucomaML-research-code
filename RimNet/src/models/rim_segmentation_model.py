@@ -1,6 +1,6 @@
 # coding: utf-8
 """
-
+Script to train segmentation model described in paper.
 """
 import segmentation_models as sm
 

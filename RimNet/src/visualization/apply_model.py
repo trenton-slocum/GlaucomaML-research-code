@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Applies the model to the images and display the results in a 2x4 image
+Applies the model to the images and display the results in a 2x4 image.
+Also generates CSV describing performance.
 raw image : true disk : true cup : true rim
           : pred disk : pred cup : pred rim
 
