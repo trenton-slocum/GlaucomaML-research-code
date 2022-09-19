@@ -19,7 +19,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 import tools.image.post_processing as pp
 
 warnings.filterwarnings("error")
@@ -254,13 +253,14 @@ def find_angle(predicted_rim, predicted_disc, raw_image):
 
 
 def find_angle_testing():
-    import segmentation_models as sm
-    import os
     import glob
+    import os
     import pathlib
+
+    import segmentation_models as sm
+    import tensorflow as tf
     from tensorflow.keras.models import load_model
     from tensorflow.keras.preprocessing import image
-    import tensorflow as tf
 
     disc_model = load_model(
         "models/20220131-230633-dm-new-backbone_tuned_mp_best",

@@ -23,10 +23,9 @@ import glob
 import pathlib
 import time
 
-import numpy as np
-
 import data_loader_dataset
 import image_handler
+import numpy as np
 
 # mixed_precision.set_global_policy('mixed_float16')
 
