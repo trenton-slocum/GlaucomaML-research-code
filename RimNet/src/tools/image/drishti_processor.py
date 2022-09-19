@@ -32,6 +32,8 @@ crop_x_size = 1200
 crop_y_size = 1200
 level = "Level_1"
 
+# Level 1 is all 4 clinicians agree, L2 is 3/4 agree, etc.
+# We use Level 1 agreement for our evaluation
 thresholds = {"Level_1": 252, "Level_2": 187, "Level_3": 124, "Level_4": 60}
 thresh, maxValue = thresholds[level], 255
 
