@@ -5,8 +5,6 @@ Post processing used throughout our model building process.
 Some of these functions are no longer used for our final model
 """
 
-
-
 import cv2 as cv
 import numpy as np
 from matplotlib import pyplot as plt
@@ -28,6 +26,8 @@ def find_area(img):
         plt.imshow(img, cmap='gray')
 
     return (cv.contourArea(contours_img[0]))
+
+
 ##############################
 
 
@@ -45,7 +45,7 @@ def find_largest_contour(result_mask):
     -------    
     mask : 2D gray scale unit8
 
-    '''    
+    '''
     # Find the contours, keep largest
     (contours, _) = cv.findContours(
         result_mask.astype(np.uint8).copy(), cv.RETR_EXTERNAL,
@@ -71,6 +71,7 @@ def find_largest_contour(result_mask):
 
 ##############################
 
+
 ##############################
 # Apply morphology
 # Opening and closing
@@ -89,8 +90,8 @@ def apply_morp(img, plot=False):
     -------    
     img_moprhed : 2D gray scale unit8
 
-    '''  
-    
+    '''
+
     closingSize = 1
 
     # Selecting an elliptical kernel
@@ -118,6 +119,8 @@ def apply_morp(img, plot=False):
         plt.axis('off')
 
     return (img_moprhed)
+
+
 ##############################
 
 
@@ -140,8 +143,8 @@ def find_largest_connected_component(img,
     -------    
     img_cca : 2D gray scale unit8
 
-    '''  
-    
+    '''
+
     kernal = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
     th, img_cca = cv.threshold(img, 50, 255, cv.THRESH_BINARY)
 
@@ -193,9 +196,8 @@ def apply_convex_hull(img, plot=False):
     -------    
     img_convex_hull : 2D gray scale unit8
 
-    '''  
-    
-    
+    '''
+
     img_convex_hull = np.zeros_like(img)
     contours, hierarchy = cv.findContours(img, cv.RETR_EXTERNAL,
                                           cv.CHAIN_APPROX_NONE)
@@ -251,7 +253,7 @@ def apply_smoothing(img, plot=False):
     -------    
     img_convex_hull : 2D gray scale unit8
 
-    '''  
+    '''
 
     # Let's consider just the disc
     # cv2.CHAIN_APPROX_NONE parameter instructs findContours() to return all boundry points

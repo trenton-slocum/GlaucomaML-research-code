@@ -239,6 +239,7 @@ def find_angle(predicted_rim, predicted_disc, raw_image):
 
     return (display_img, angle_counts)
 
+
 def min_max_points_optimized(a, b, c_points):
     '''
     Uses angle between segements to find the closest (smallest angle) and furthers (largest angle)
