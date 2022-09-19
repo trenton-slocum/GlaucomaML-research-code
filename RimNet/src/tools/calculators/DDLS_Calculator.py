@@ -11,7 +11,6 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 import tools.image.post_processing as pp
 
 warnings.filterwarnings("error")
@@ -239,7 +238,6 @@ def find_angle(predicted_rim, predicted_disc, raw_image):
     ############
 
     return (display_img, angle_counts)
-
 
 def min_max_points_optimized(a, b, c_points):
     '''
