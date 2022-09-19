@@ -10,8 +10,6 @@ raw image : true disk : true cup : true rim
 
 """
 
-from email.policy import default
-
 import cv2
 import numpy as np
 import pandas as pd
