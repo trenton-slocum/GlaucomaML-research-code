@@ -17,7 +17,6 @@ import glob
 import os
 import pathlib
 import random
-
 from collections import defaultdict
 
 import PIL
@@ -31,7 +30,6 @@ import fnmatch
 random.seed(10)
 
 import segmentation_models as sm
-
 import tools.calculators.DDLS_Calculator as ddls
 import tools.image.post_processing as pp
 
