@@ -17,7 +17,7 @@ import glob
 import os
 import pathlib
 import random
-import time
+
 from collections import defaultdict
 
 import PIL
@@ -31,6 +31,7 @@ import fnmatch
 random.seed(10)
 
 import segmentation_models as sm
+
 import tools.calculators.DDLS_Calculator as ddls
 import tools.image.post_processing as pp
 
@@ -54,6 +55,24 @@ def dice(y_true, y_pred):
     return score
 
 
+def calc_all_dice(result1, result2):
+    """Calculates rim, cup, and disc dice from 0/1/2 masks."""
+
+    class_labels = [1, 2]
+    dice_list = []
+    for value in class_labels:
+        filtered_res1 = (result1 == value)
+        filtered_res2 = (result2 == value)
+        dice_list.append(dice(filtered_res1, filtered_res2))
+
+    res1_disc = np.clip(result1, 0, 1)
+    res2_disc = np.clip(result2, 0, 1)
+
+    dice_list.append(dice(res1_disc, res2_disc))
+
+    return dice_list
+
+
 def iou_coef(y_true, y_pred):
     iou = np.zeros(y_true.shape[0])
     #total_pixels = 2 * y_true.shape[1] * y_true.shape[2] * y_true.shape[3]
@@ -68,6 +87,14 @@ def iou_coef(y_true, y_pred):
     return meaniou
 
 
+def calc_iou(filtered_res1, filtered_res2):
+    """Calculates the IoU of two 0/1 arrays."""
+    intersection = np.logical_and(filtered_res1, filtered_res2)
+    union = np.logical_or(filtered_res1, filtered_res2)
+    iou_score = np.sum(intersection) / np.sum(union)
+    return iou_score
+
+
 def iou_helper(result1, result2, num_classes=3):
     '''Intersection Over Union for each class
 
@@ -79,18 +106,14 @@ def iou_helper(result1, result2, num_classes=3):
     Returns
     -------
     list
-        Calcaulted IoU for each class
+        Calculated IoU for each class
 
     '''
     iou_list = []
     for value in range(num_classes):
         filtered_res1 = (result1 == value)
         filtered_res2 = (result2 == value)
-
-        intersection = np.logical_and(filtered_res1, filtered_res2)
-        union = np.logical_or(filtered_res1, filtered_res2)
-        iou_score = np.sum(intersection) / np.sum(union)
-        iou_list.append(iou_score)
+        iou_list.append(calc_iou(filtered_res1, filtered_res2))
 
     return iou_list
 
@@ -133,6 +156,13 @@ def is_connected(predicted_rim, error_checking=False):
 
     If the rim is connected, we'll find the single largest contour, find the RDR
 
+    predicted_rim = cv2.imread("..\\\\images\\broken_rim_tests\\mask_scaled\\1.3.6.1.4.1.29565.1.4.0.27655.1453808400.445496.MASK.jpg")
+    predicted_rim = cv2.cvtColor(predicted_rim, cv2.COLOR_BGR2GRAY)
+    predicted_rim = cv2.threshold(predicted_rim, 200, 255, cv2.THRESH_BINARY)[1]
+    predicted_rim_disconnected_test = predicted_rim
+    predicted_rim = rim_truth
+
+    check:  '..\\images\\3.28.22 Broken-Whole Rim Ready\\train\\raw\\UCLA_1.3.6.1.4.1.29565.1.4.0.27655.1453781634.436925.jpg'
     '''
 
     predicted_rim_disconnected_test = pp.find_largest_connected_component(
@@ -271,14 +301,15 @@ _, img_width, img_height, img_channels = rim_model.layers[0].input_shape[0]
 # Locations to our images
 
 # Use these to switch between datasets
-DRISHTI_L1_SPLIT_PATH = '../images/Drishti_Level_1_split//'
+DRISHTI_L1_SPLIT_PATH = '../images/Drishti_Level_1_split_0622//'
+DRISHTI_L2_SPLIT_PATH = '../images/Drishti_Level_2_split//'
 INTERNAL_PATH = '../images/4.24.22 Broken-Whole Rim Ready'
 
 gpu_machine = True
 if (gpu_machine):
-    raw_image_path = INTERNAL_PATH
-    rim_image_path = INTERNAL_PATH
-    save_image_path = '../images/multiclass_4.24.22_outputs'
+    raw_image_path = DRISHTI_L1_SPLIT_PATH
+    rim_image_path = DRISHTI_L1_SPLIT_PATH
+    save_image_path = '../images/multiclass_8.26.22_outputs_drishti_l1'
     # save_image_path = '../images/comparison_resized_iou_rim_split_oct_tuned_224'
 else:
     raw_image_path = DRISHTI_L1_SPLIT_PATH
@@ -301,10 +332,11 @@ for suffix in ['train', 'val', 'test']:
 ###########################
 # Save results
 
-CSV_NAME = '..//files_output//4.25.22_multiclass_results_header.csv'
+CSV_NAME = '..//files_output//8.26.22_multiclass_l1_drishti_results_header.csv'
 df_results = pd.DataFrame(
     columns=('IMAGE', 'TYPE', 'RIM_IOU_BG', 'RIM_IOU_RIM', 'RIM_IOU_CUP',
-             'RIM_IOU_MEAN', 'RIM_ACCURACY', 'TRUE_DISC_DIAM', 'TRUE_CUP_DIAM',
+             'RIM_IOU_DISC', 'RIM_IOU_MEAN', 'RIM_ACCURACY', 'RIM_DICE',
+             'CUP_DICE', 'DISC_DICE', 'TRUE_DISC_DIAM', 'TRUE_CUP_DIAM',
              'TRUE_RIM_DIAM', 'TRUE_RATIO', 'TRUE_MEAN_RIM',
              'PRED_PP_DISC_DIAM', 'PRED_PP_CUP_DIAM', 'PRED_PP_RIM_DIAM',
              'PRED_PP_RATIO', 'PRED_PP_MEAN_RIM', 'RIM_AREA_TRUE',
@@ -388,6 +420,36 @@ def image_to_mask(image):
     return final_mask
 
 
+def drishti_image_to_mask(image, cup_image):
+    """Converts an image to a mask.
+        Args:
+            image: A black and white image. It has the rim marked.
+        Returns:
+            an image where black maps to 0, rim to 1, and cup to 2
+    """
+    image = np.asarray(image)
+
+    # If there's a transparency layer, ditch it
+    if image.shape[-1] == 4:
+        print(f'shape is : {image.shape}')
+        image = image[:, :, :3]
+        print(f'shape is fixed to: {image.shape}')
+
+    # Output of prior step goes up to 255, so clip back to 1
+    cup = np.clip(np.asarray(cup_image), 0, 1)
+
+    rim_mask = np.clip(np.asarray(image), 0, 1)
+    cup_mask = cup * 2
+
+    # Mask will be 0, 1, and 2 exclusively
+    final_mask = rim_mask + cup_mask
+    final_mask = np.clip(final_mask, 0, 2)
+
+    if len(final_mask.shape) == 3:
+        final_mask = final_mask[:, :, 1]
+    return final_mask
+
+
 #for i, img_path in enumerate(raw_images[:10]):
 error_checking = False
 
@@ -409,17 +471,24 @@ for split in splits:
 
     raw_images = glob.glob(
         str(pathlib.Path(f'{raw_image_path}//{split}//raw//*')))
-    true_masks = glob.glob(
-        str(pathlib.Path(f'{rim_image_path}//{split}//mask//*')))
+
+    if 'drishti' not in raw_image_path.lower():
+        true_masks = glob.glob(
+            str(pathlib.Path(f'{rim_image_path}//{split}//mask//*')))
+    else:
+        true_masks = glob.glob(
+            str(pathlib.Path(f'{rim_image_path}//{split}//Rim//*')))
+        true_cup_masks = glob.glob(
+            str(pathlib.Path(f'{rim_image_path}//{split}//Cup//*')))
 
     print(f'Split: {split}, total images: {len(raw_images)}')
     for i, img_path in enumerate(raw_images):
-        start = time.time()
-        if img_path.endswith(".png"):
+        if img_path.endswith(".png") or img_path.endswith(".jpg"):
             print(str(i + 1),
                   len(raw_images),
                   os.path.basename(img_path),
                   sep=' : ')
+
             ###########################
             # Find true cup / disk & load it, if not found skip
             # Also resize it to the size used for prediction.
@@ -441,7 +510,20 @@ for split in splits:
             img = apply_clahe(np.squeeze(img.astype(np.uint8)))
             img = np.expand_dims(img, 0).astype(np.float32)
 
-            true_mask = image_to_mask(img_mask)
+            # If not drishti, we need to convert the 3 color mask to 0, 1, 2
+            if 'drishti' not in raw_image_path.lower():
+                true_mask = image_to_mask(img_mask)
+            else:
+                # For drishti images, we need to take the 0, 1 rim mask, and
+                # convert it into a 0,1,2 background, rim, cup mask.
+                # To do this, we'll identify the cup and color it in as 2
+                img_mask = np.clip(np.asarray(img_mask), 0, 1)
+                img_path_cup_mask = fnmatch.filter(
+                    true_cup_masks, "*" + os.path.basename(img_path))
+
+                img_cup_mask = PIL.Image.open(img_path_cup_mask[0]).resize(
+                    (img_width, img_height), PIL.Image.NEAREST)
+                true_mask = drishti_image_to_mask(img_mask, img_cup_mask)
 
             # output is w, h, 3
             predicted_rim = rim_model.predict(img)
@@ -458,6 +540,11 @@ for split in splits:
             # Should be w, h, 1
             predicted_mask = create_mask(predicted_rim)
 
+            np.save(os.path.join(save_image_path, split,
+                                 os.path.basename(img_path)[:-4] + '.npy'),
+                    predicted_mask,
+                    allow_pickle=False)
+
             print('figure generation')
             gen_figure([
                 np.squeeze(raw_img) / 255,
@@ -469,6 +556,9 @@ for split in splits:
             ious = iou_helper(true_mask, np.squeeze(predicted_mask))
             print(ious)
             all_ious.append(ious)
+
+            dices = calc_all_dice(true_mask, np.squeeze(predicted_mask))
+
             accuracy = calc_accuracy(true_mask, np.squeeze(predicted_mask))
             all_accuracy.append(accuracy)
 
@@ -515,6 +605,8 @@ for split in splits:
             true_disc_mask = np.greater(true_mask_sums, 0).astype(
                 np.uint8) * 255
 
+            disc_iou = calc_iou(true_disc_mask / 255, pred_disc_mask / 255)
+
             # TODO(tyler): Make this loop into a stateless function
             # Clear variables from last loop
             true_degrees = None
@@ -541,6 +633,10 @@ for split in splits:
                 display_img, angle_counts = find_angle_wrapper(
                     pred_rim_mask, pred_disc_mask, np.squeeze(img_raw))
                 pred_degrees = np.sum(angle_counts)
+                # plt.imshow(display_img)
+                # plt.savefig(
+                #     os.path.join(save_image_path, 'test_image_pred.png'))
+                # plt.close()
 
             # Check true
             if is_connected(true_rim_mask):
@@ -561,6 +657,10 @@ for split in splits:
                 display_img, angle_counts = find_angle_wrapper(
                     true_rim_mask, true_disc_mask, np.squeeze(img_raw))
                 true_degrees = np.sum(angle_counts)
+                # plt.imshow(display_img)
+                # plt.savefig(
+                #     os.path.join(save_image_path, 'test_image_real.png'))
+                # plt.close()
 
             #         ###########################
             #         # Save iou results
@@ -571,10 +671,12 @@ for split in splits:
                     'RIM_IOU_BG': ious[0],
                     'RIM_IOU_RIM': ious[1],
                     'RIM_IOU_CUP': ious[2],
+                    'RIM_IOU_DISC': disc_iou,
                     'RIM_IOU_MEAN': np.mean(ious),
                     'RIM_ACCURACY': accuracy,
-                    # 'RIM_DICE': rim_dice,
-                    # 'RIM_DICE_P': rim_dice_processed,
+                    'RIM_DICE': dices[0],
+                    'CUP_DICE': dices[1],
+                    'DISC_DICE': dices[2],
                     'TRUE_DISC_DIAM': df_diameters['min_disc'],
                     'TRUE_CUP_DIAM': df_diameters['min_cup'],
                     'TRUE_RIM_DIAM': df_diameters['min_rim'],
