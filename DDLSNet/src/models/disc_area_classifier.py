@@ -1,3 +1,5 @@
+"""Script to train a model that predicts disc size for image of optic nerve head."""
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
