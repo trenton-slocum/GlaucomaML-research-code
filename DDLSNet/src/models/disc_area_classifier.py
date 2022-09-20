@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-
 from tools.data.disc_size_pipeline import DiscSizeDSBuilder
 from tools.metrics import (gen_confusion_matrix, get_accuracy_scores,
                            get_auc_scores, get_classification_report)
