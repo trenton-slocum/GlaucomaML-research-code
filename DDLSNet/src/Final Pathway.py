@@ -10,12 +10,6 @@ DDLS grade.
 
 Created on Sun Nov 22 15:52:19 2020
 
-Streamlined Pathway:
-             LE/RE Models                       Apply Flip Dataset to LE             U-Net Predict on Dataset
-    Raw Images ----------> Images within RE/LE Folder ----------> Flipped LE/Normal RE Folder --------> Retinal Rims
-              Blob Sorter QA                 DDLS Calculator
-    Retinal Rims ----------> Good Retinal Rims ----------> DDLS Scores + Area Ratios
-
 A note in using tf.image.decode_jpg vs cv2
 https://stackoverflow.com/questions/45516859/differences-between-cv2-image-processing-and-tf-image-processing
 
