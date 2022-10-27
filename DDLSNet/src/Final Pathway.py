@@ -1,34 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Script to generate a DDLS grade for each fundus image in the dataset.
-
 First calls the segmentation model on the image and calculates minimum
 rim to disc ratio or angle of missing rim.
 
 This information is then combined with the predicted disc size to generate a
 DDLS grade.
-
-Created on Sun Nov 22 15:52:19 2020
-
-A note in using tf.image.decode_jpg vs cv2
-https://stackoverflow.com/questions/45516859/differences-between-cv2-image-processing-and-tf-image-processing
-
-You will get different results, for example:
-    decode_jp not using INTEGER_ACCURATE
-    array([[0.15159622, 0.8148405 , 0.03356328]], dtype=float32)
-    cv2
-    array([[0.17505534, 0.8011287 , 0.02381603]], dtype=float32)
-
-If we use INTEGER_ACCURATE results are similar:
-    array([[0.17505272, 0.8011293 , 0.02381799]], dtype=float32)
-    array([[0.17505534, 0.8011287 , 0.02381603]], dtype=float32)
-
-
-Since the model was trained without INTEGER_ACCURATE method (default), we will use this as well
-image = tf.io.read_file(image_path)
-image = tf.image.decode_jpeg(image)
-image = tf.image.convert_image_dtype(image, tf.float32) # Converts image 0 t 1 scale
-
 
 We are not making all images RE for the disc size since vertical flip augmentation was used
 in training the model
@@ -108,6 +85,12 @@ def create_mask(pred_mask):
     pred_mask = np.array(pred_mask)
     pred_mask = np.squeeze(pred_mask)
     return pred_mask
+
+def create_mask_multiclass(pred_mask):
+    """ Converts a W,H,N mask to W,H with integer labels"""
+    pred_mask = tf.argmax(pred_mask, axis=-1)
+    pred_mask = pred_mask[..., tf.newaxis]
+    return pred_mask[0]
 
 
 ###################################################
@@ -223,8 +206,8 @@ def apply_rim_model(img_path):
 
         predicted_rim = np.concatenate([new_rim, predicted_rim], axis=-1)
 
-    predicted_rim = create_mask(predicted_rim)
-    predicted_rim = 255 * predicted_rim.astype(np.uint8)
+    predicted_rim = create_mask_multiclass(predicted_rim)
+    predicted_rim = np.array(predicted_rim, dtype=np.uint8)
 
     return (predicted_rim)
 
@@ -271,30 +254,12 @@ def rim_connected_check(predicted_rim, results, error_checking=False):
 
 
 def find_rim_disc_ratio(predicted_rim,
+                        predicted_disc,
+                        predicted_cup,
                         img_raw,
                         results,
                         img_path,
                         error_checking=False):
-    # Find the single largest connected component
-    # Resize
-    # Find the narrowest rim and RDR
-    predicted_rim = pp.find_largest_connected_component(predicted_rim,
-                                                        dilate=False,
-                                                        erode=False)
-
-    # Resize to original raw image
-    resize_width = img_raw.shape[1]
-    resize_height = img_raw.shape[0]
-    predicted_rim = cv2.resize(predicted_rim, (resize_width, resize_height),
-                               interpolation=cv2.INTER_LINEAR)
-
-    # Extract disc and cup
-    predicted_disc, predicted_cup = pp.extract_disc_cup(predicted_rim)
-
-    if error_checking:
-        plt.imshow(predicted_rim, cmap='gray')
-        plt.imshow(predicted_disc, cmap='gray')
-        plt.imshow(predicted_cup, cmap='gray')
 
     # Find the narrowest rim
     display_rim, df_rim_diameters = ddls.find_diameters(
@@ -308,8 +273,10 @@ def find_rim_disc_ratio(predicted_rim,
     rim_disc_ratio = df_rim_diameters.loc[np.argmin(
         df_rim_diameters['rim/disc'])]
 
-    results['DISC_AREA'] = np.sum(predicted_disc)
-    results['CUP_AREA'] = np.sum(predicted_cup)
+    if False:
+        plt.imshow(display_rim)
+
+
     results['RIM_DIAM'] = rim_disc_ratio['rim_diam']
     results['DISC_DIAM'] = rim_disc_ratio['disc_diam']
     results['CUP_DIAM'] = rim_disc_ratio['cup_diam']
@@ -317,92 +284,14 @@ def find_rim_disc_ratio(predicted_rim,
 
     rim_disc_ratio = rim_disc_ratio['rim/disc']
 
-    return (display_rim, df_rim_diameters, predicted_disc, predicted_cup,
-            predicted_rim)
-
-
-def find_disconnected_angle(predicted_rim, predicted_disc, img_raw, results,
-                            img_path):
-    '''
-    # Testing
-    mask = cv2.imread("..//images//broken_rim_tests//AXIS01_42766_242981_20150713114713867d8b5f5754c94e697_1.MASK.jpg")
-    mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-    mask = cv2.threshold(mask, 200, 255, cv2.THRESH_BINARY)[1]
-
-
-
-    temp = np.zeros_like(mask)
-    cv2.drawContours(temp, contours, -1, (255, 255, 255), 2)
-    plt.imshow(temp, cmap='gray')
-
-    plt.imshow(mask, cmap='gray')
-
-
-    # Connected components with stats.
-    nb_components, output, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=4)
-
-    # Find the largest non background component.
-    # Note: range() starts from 1 since 0 is the background label.
-    max_label, max_size = max([(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, nb_components)], key=lambda x: x[1])
-
-    # Ignore the first element since 0 is always going to be the largest, it is the background
-    largest_components = np.argsort(stats[:, cv2.CC_STAT_AREA])[:-1][::-1]
-
-    if len(largest_components) > 2:
-        largest_components = largest_components[0:1]
-
-    test = 255 * np.isin(output, largest_components).astype('uint8')
-    plt.imshow(test, cmap='gray')
-
-    '''
-    # Connected components with stats.
-    nb_components, output, stats, centroids = cv2.connectedComponentsWithStats(
-        predicted_rim, connectivity=4)
-    # Ignore the first element since 0 is always going to be the largest, it is the background
-    largest_components = np.argsort(stats[:, cv2.CC_STAT_AREA])[:-1][::-1]
-
-    # If we have multiple disconnects, limit to the top 2
-    if len(largest_components) > 2:
-        largest_components = largest_components[0:2]
-
-    # Generate the disconnected rim
-    predicted_rim = 255 * np.isin(output, largest_components).astype('uint8')
-
-    # Resize to original raw image
-    resize_width = img_raw.shape[1]
-    resize_height = img_raw.shape[0]
-    predicted_rim = cv2.resize(predicted_rim, (resize_width, resize_height),
-                               interpolation=cv2.INTER_LINEAR)
-
-    #plt.imshow(predicted_rim, cmap='gray')
-
-    # Find the angle and show on image
-    display_rim, angles = ddls.find_angle(predicted_rim, predicted_disc,
-                                          cv2.imread(img_path)[:, :, ::-1])
-
-    results['ANGLES'] = angles
-    results['ANGLE_SUM'] = np.sum(angles)
-
-    # TO DO:
-    # JC says we should still try to subtract the rim from the disc we find to
-    # calculate the "cup" area. This will require some work
-    predicted_cup = predicted_disc - predicted_rim
-    if False:
-        plt.imshow(predicted_disc, cmap='gray')
-        plt.imshow(predicted_cup, cmap='gray')
-
-    results['DISC_AREA'] = np.sum(predicted_disc)
-    results['CUP_AREA'] = np.sum(predicted_cup)
-
-    return (display_rim, predicted_disc, predicted_cup, predicted_rim)
+    return (display_rim, df_rim_diameters)
 
 
 ###################################################
 
 ###################################################
 print('reading models')
-#rim_model = load_model("../models/20211025-021825-rm-new-backbone_tuned_mp_best",custom_objects={'iou_score': sm.metrics.iou_score})
-rim_model = load_model("../models/20220317-173937-rm-broken_best",
+rim_model = load_model("../models/20220426-062458-Rim-multiclass_best",
                        custom_objects={'iou_score': sm.metrics.iou_score})
 _, rim_img_width, rim_img_height, rim_img_channels = rim_model.layers[
     0].input_shape[0]
@@ -427,10 +316,10 @@ print('done')
 df_results_empty = pd.DataFrame(columns=('IMAGE', 'TYPE', 'DISC_SIZE',
                                          'DISC_SIZE_FROM', 'RIM_DISC_RATIO',
                                          'ANGLES', 'ANGLE_SUM', 'DDLS_SCORE',
-                                         'DISC_AREA', 'CUP_AREA', 'RIM_DIAM',
-                                         'DISC_DIAM', 'CUP_DIAM', 'GROUP'))
-results_save_path = '..//files_output//DDLS_Pipeline_Output__2022_04_15_100_model.csv'
-results_true_save_path = '..//files_output//DDLS_Pipeline_Output_True__2022_04_15_100_model.csv'
+                                         'DISC_AREA', 'CUP_AREA', 'RIM_AREA',
+                                         'RIM_DIAM', 'DISC_DIAM', 'CUP_DIAM', 'GROUP'))
+results_save_path = '..//files_output//DDLS_Pipeline_Output__20220426-062458-Rim-multiclass_best.csv'
+results_true_save_path = '..//files_output//DDLS_Pipeline_Output_True__20220426-062458-Rim-multiclass_best.csv'
 
 df_results_empty.to_csv(results_save_path, mode='w', header=True, index=False)
 
@@ -469,32 +358,33 @@ df_images = pd.DataFrame(df_images)
 #############
 
 #############
-raw_image_path = '../images/3.16.22 Broken-Whole Rim Ready//'
+raw_image_path = '..//images//4.22.22.Raw.Fundus//'
+image_segments_path = '..//images//4.24.22 Broken-Whole Rim Ready//'
 
-save_image_path = '../images/4.15.22 100 Model 100 Data/ddls/'
-save_image_path_steps = '../images/4.15.22 100 Model 100 Data/ddls_steps/'
+save_image_path = '../images/20220426-062458-Rim-multiclass_best/ddls/'
+save_image_path_steps = '../images/20220426-062458-Rim-multiclass_best/ddls_steps/'
 
 df_images = pd.DataFrame()
 
 print('reading in raw images')
-for split in ['test', 'val']:
+for split in ['train', 'test', 'val']:
     curr_path = raw_image_path + '//' + split
     raw_images = glob.glob(
-        str(pathlib.Path(f'{raw_image_path}//{split}//raw//*.jpg')))
+        str(pathlib.Path(f'{image_segments_path}//{split}//raw//*.png')))
 
     temp = {
         "RAW":
         raw_images,
         "MASKS": [
-            f'{raw_image_path}//{split}//mask//' + os.path.basename(i)
+            f'{image_segments_path}//{split}//mask//' + os.path.basename(i)
             for i in raw_images
         ],
         "DDLS_IMAGE": [
-            f'{save_image_path}//{split}//' + os.path.basename(i)
+            f'{image_segments_path}//{split}//' + os.path.basename(i)
             for i in raw_images
         ],
         "DDLS_IMAGE_STEPS": [
-            f'{save_image_path_steps}//{split}//' + os.path.basename(i)
+            f'{image_segments_path}//{split}//' + os.path.basename(i)
             for i in raw_images
         ],
         "GROUP":
@@ -555,7 +445,10 @@ if 'DDLS_IMAGE_STEPS' in df_images.columns:
 print('done creating dirs')
 
 print('reading a csv')
-rim_net_demo = pd.read_csv("..//files_output//rim_net_images_some_demo.csv")
+rim_net_demo = pd.read_csv("..//files//clinician_train_val_disc_size - lourdes_broken.csv")
+rim_net_demo = rim_net_demo[rim_net_demo['DISC_SIZE_AGREE'] >= 1]
+rim_net_demo['TYPE'].unique()
+FILE_ONLY = True
 print('done')
 
 ###################
@@ -563,10 +456,42 @@ print('done')
 error_checking = False
 print('iterating')
 print(len(df_images))
+
+# Images subset
 for i, index_row in enumerate(df_images.iterrows()):
     row = index_row[1]
     index = index_row[0]
     img_path = row['RAW']
+    img_path = glob.glob(str(pathlib.Path(f'{raw_image_path}//{pathlib.Path(img_path).stem}.png')))[0]
+
+    if FILE_ONLY:
+        if (rim_net_demo['IMAGE_STEM'] == pathlib.Path(img_path).stem).any():
+            #print("Found")
+            true_info = rim_net_demo[rim_net_demo['IMAGE_STEM'] == pathlib.Path(img_path).stem]
+        else:
+            continue
+
+    # Subset
+    '''
+    if not( pathlib.Path(img_path).stem in ['1.3.6.1.4.1.29565.1.4.0.18030.1453912853.63898',
+                                       '1.3.6.1.4.1.29565.1.4.0.18030.1453914157.64324',
+                                       '1.3.6.1.4.1.29565.1.4.0.18030.1453928630.68899',
+                                       '1.3.6.1.4.1.29565.1.4.0.18030.1453940486.72614',
+                                       '1.3.6.1.4.1.29565.1.4.0.18030.1453943000.73437']):
+        continue
+    '''
+    if not( pathlib.Path(img_path).stem in ['1.3.6.1.4.1.29565.1.4.0.18030.1453920640.66377',
+                                            '1.3.6.1.4.1.29565.1.4.0.18030.1453978539.84422',
+                                            '1.3.6.1.4.1.29565.1.4.0.18030.1453989685.87854',
+                                            '1.3.6.1.4.1.29565.1.4.0.27655.1453804085.444142',
+                                            'AXIS01_27242_410418_2015111216004563648d561a049b638e2_3',
+                                            'AXIS01_54810_669073_2016101310465518461c7e0be40312efa_5']):
+        continue
+
+
+
+
+
     #print(index)
     #break
     # if i < 860:
@@ -576,6 +501,7 @@ for i, index_row in enumerate(df_images.iterrows()):
           df_images.shape[0],
           os.path.basename(img_path),
           sep=' : ')
+
     ##################################
     results = {
         'IMAGE': "",
@@ -588,6 +514,7 @@ for i, index_row in enumerate(df_images.iterrows()):
         'DDLS_SCORE': "",
         'DISC_AREA': "",
         'CUP_AREA': "",
+        'RIM_AREA': "",
         'RIM_DIAM': "",
         'DISC_DIAM': "",
         'CUP_DIAM': ""
@@ -617,6 +544,7 @@ for i, index_row in enumerate(df_images.iterrows()):
     #img_raw = tf.image.convert_image_dtype(img_raw, tf.float32)
     ##################################
 
+    '''
     ##################################
     # Disc Model
     # Load image, resize, apply CLAHE, expand dim for model
@@ -625,48 +553,64 @@ for i, index_row in enumerate(df_images.iterrows()):
     if error_checking:
         plt.imshow(disc_model_predicted_disc, cmap='gray')
     ##################################
+    '''
 
     ##################################
     # Rim Model
     # We'll either extract a rim/disc or a broken angle total
-    predicted_rim = apply_rim_model(img_path)
+    predicted_multiclass = apply_rim_model(img_path)
+    ##################################
+
+    ##################################
+    # Extract rim, disc, cup
+    resize_width = img_raw.shape[1]
+    resize_height = img_raw.shape[0]
+    predicted_multiclass_scaled = cv2.resize(predicted_multiclass, (resize_width, resize_height), interpolation=cv2.INTER_NEAREST)
+
+    predicted_rim = 255 * np.where(predicted_multiclass_scaled == 1, 1, 0).astype(np.uint8)
+    predicted_cup = 255 * np.where(predicted_multiclass_scaled == 2, 1, 0).astype(np.uint8)
+    predicted_disc = predicted_rim + predicted_cup
 
     if error_checking:
+        plt.imshow(predicted_multiclass, cmap='gray')
+        plt.imshow(predicted_multiclass_scaled, cmap='gray')
         plt.imshow(predicted_rim, cmap='gray')
+        plt.imshow(predicted_cup, cmap='gray')
+        plt.imshow(predicted_disc, cmap='gray')
 
+    results['DISC_AREA'] = np.sum(predicted_disc == 255)
+    results['CUP_AREA'] = np.sum(predicted_cup == 255)
+    results['RIM_AREA'] = np.sum(predicted_rim == 255)
+    ##################################
+
+    ##################################
     # Check if there is any hiearchy
     # results is a mutable dictionary, passed by referenced
     rim_connected_check(predicted_rim, results)
 
     if results['TYPE'] == "Connected":
-        display_rim, df_rim_diameters, predicted_disc, predicted_cup, predicted_rim_scaled = find_rim_disc_ratio(
-            predicted_rim, img_raw, results, img_path)
-
-        if error_checking:
-            plt.imshow(predicted_disc, cmap='gray')
-            plt.imshow(predicted_cup, cmap='gray')
-            plt.imshow(display_rim)
+        display_rim, df_rim_diameters = find_rim_disc_ratio(predicted_rim,
+                                    predicted_disc,
+                                    predicted_cup, img_raw, results, img_path)
 
     elif results['TYPE'] == "Disconnected":
-        # Use the predicted disc from disc_model for the rest of the steps
-        predicted_disc = disc_model_predicted_disc
-        display_rim, predicted_disc, predicted_cup, predicted_rim_scaled = find_disconnected_angle(
-            predicted_rim, predicted_disc, img_raw, results, img_path)
+        display_rim, angles = ddls.find_angle(predicted_rim, predicted_disc, cv2.imread(img_path)[:, :, ::-1])
+
+        results['ANGLES'] = angles
+        results['ANGLE_SUM'] = np.sum(angles)
+
         # If the angle is 0, that means we have a bad center, this shouldn't be considered
         if results['ANGLE_SUM'] == 0:
             results['DDLS_SCORE'] = 0
 
-    predicted_rim_for_output = predicted_rim_scaled.copy()
-
     if error_checking:
         plt.imshow(display_rim)
-        plt.imshow(predicted_rim_for_output, cmap='gray')
+
     ##################################
 
     #################
     # Disc Size
     apply_disc_size(predicted_disc, img_raw, results)
-    print(results['DISC_SIZE'])
     #################
 
     #################
@@ -682,19 +626,19 @@ for i, index_row in enumerate(df_images.iterrows()):
     # Save images for each step
     # print(f'trying {row["MASKS"]}')
     # print(os.path.exists(row["MASKS"]))
-    if 'DDLS_IMAGE_STEPS' in df_images.columns and os.path.exists(
-            row["MASKS"]):
+    if 'DDLS_IMAGE_STEPS' in df_images.columns and os.path.exists(row["MASKS"]):
         results_true = {
             'IMAGE': "",
             'TYPE': "",
             'DISC_SIZE': "",
-            'DISC_SIZE_FROM': "Model",
+            'DISC_SIZE_FROM': "Clinician",
             'RIM_DISC_RATIO': "",
             'ANGLES': "",
             'ANGLE_SUM': "",
             'DDLS_SCORE': "",
             'DISC_AREA': "",
             'CUP_AREA': "",
+            'RIM_AREA': "",
             'RIM_DIAM': "",
             'DISC_DIAM': "",
             'CUP_DIAM': "",
@@ -705,47 +649,65 @@ for i, index_row in enumerate(df_images.iterrows()):
         results_true['ANGLES'] = 0
         results_true['ANGLE_SUM'] = 0
 
+        results_true['DISC_SIZE'] = true_info.iloc[0]['DISC_SIZE_MODE']
+
         predicted_disc_true = []
         rim_truth = []
 
-        # Apply similar steps to the true image for comparison
-        predicted_disc_true = apply_disc_model(img_path, img_raw)
+        #####################
+        # Multitruuth truth
+        multiclass_truth = cv2.cvtColor(cv2.imread(row["MASKS"]), cv2.COLOR_RGB2BGR)
 
-        # Rim truth
-        rim_truth = cv2.imread(row["MASKS"])
-        rim_truth = cv2.cvtColor(rim_truth, cv2.COLOR_BGR2GRAY)
-        rim_truth = cv2.threshold(rim_truth, 200, 255, cv2.THRESH_BINARY)[1]
-        rim_connected_check(rim_truth, results_true)
-        #plt.imshow(rim_truth, cmap='gray')
+        if multiclass_truth.shape[1] != resize_width:
+            multiclass_truth = cv2.resize(multiclass_truth, (resize_width, resize_height), interpolation=cv2.INTER_NEAREST)
 
+
+        rim_truth = multiclass_truth[:,:,0]
+        cup_truth = multiclass_truth[:,:,2] - multiclass_truth[:,:,0]
+        disc_truth = rim_truth + cup_truth
+
+        if False:
+            plt.imshow(multiclass_truth)
+            plt.imshow(rim_truth, cmap='gray')
+            plt.imshow(cup_truth, cmap='gray')
+            plt.imshow(disc_truth, cmap='gray')
+
+
+        results_true['DISC_AREA'] = np.sum(disc_truth == 255)
+        results_true['CUP_AREA'] = np.sum(cup_truth == 255)
+        results_true['RIM_AREA'] = np.sum(rim_truth == 255)
+        #####################
+
+        #####################
+        # IoU
+        '''
+        rim_model_small = 255 * np.where(predicted_multiclass == 1, 1, 0).astype(np.uint8)
         resized_truth = cv2.resize(rim_truth, (224, 224))
-        rim_iou = iou(np.clip(predicted_rim, 0, 1),
+        rim_iou = iou(np.clip(rim_model_small, 0, 1),
                       np.clip(resized_truth, 0, 1))
         print(f'Rim IoU: {rim_iou}')
         results['RIM_IOU'] = rim_iou
+        '''
+        #####################
 
+        rim_connected_check(rim_truth, results_true)
         # RDR or Angle
         if results_true['TYPE'] == "Connected":
-            display_rim_true, df_rim_diameters_true, predicted_disc_true, predicted_cup_true, _ = find_rim_disc_ratio(
-                rim_truth, img_raw, results_true, img_path)
+            display_rim_true, _ = find_rim_disc_ratio(rim_truth,
+                                        disc_truth,
+                                        cup_truth, img_raw, results_true, img_path)
         elif results_true['TYPE'] == "Disconnected":
-            display_rim_true, _, _, _ = find_disconnected_angle(
-                rim_truth, predicted_disc_true, img_raw, results_true,
-                img_path)
-            #plt.imshow(display_rim_true)
-            #plt.imshow(display_rim)
+            display_rim_true, angles = ddls.find_angle(rim_truth, disc_truth, cv2.imread(img_path)[:, :, ::-1])
+
+            results_true['ANGLES'] = angles
+            results_true['ANGLE_SUM'] = np.sum(angles)
+
+            # If the angle is 0, that means we have a bad center, this shouldn't be considered
             if results_true['ANGLE_SUM'] == 0:
                 results_true['DDLS_SCORE'] = 0
 
-        # Disc Size
-        if os.path.basename(img_path) in rim_net_demo['Image_RimNet'].unique():
-            tmp = rim_net_demo[os.path.basename(img_path) ==
-                               rim_net_demo['Image_RimNet']]
-            results_true['DISC_SIZE_FROM'] = "File"
-            results_true['DISC_SIZE'] = tmp['Disc_Size'].values[0]
-        else:
-            apply_disc_size(predicted_disc_true, img_raw, results_true)
-            results_true['DISC_SIZE_FROM'] = "Model"
+        if False:
+            plt.imshow(display_rim_true)
 
         # DDLS Score
         if results_true['DDLS_SCORE'] != 0:
@@ -762,18 +724,69 @@ for i, index_row in enumerate(df_images.iterrows()):
                           header=False,
                           index=False)
 
-        # Image
-        nrows = 2
-        ncols = 2
+        mono_font = {'fontname':'monospace'}
+        #########################
+        # Image RDR RADAR
+        nrows = 1
+        ncols = 3
         i = 0
         fig, ax = plt.subplots(nrows=nrows, ncols=ncols)
+
+        # Raw
         i += 1
         plt.subplot(nrows, ncols, i)
-        plt.imshow(img_raw)
+        plt.imshow(cv2.imread(img_path)[:, :, ::-1])
         plt.axis('off')
-        plt.title(" ")
+        plt.title('')
 
-        # Rim True
+        # Clinician
+        rim_area_disc_area = results_true['RIM_AREA'] / results_true['DISC_AREA']
+        if results_true['TYPE'] == "Connected":
+            title = f" Rim/Disc: {np.round(results_true['RIM_DISC_RATIO'],2):.2f}\n      ARW: {np.round(rim_area_disc_area,2):.2f}"
+        else:
+            title = f"Rim Angle: {np.round(results_true['ANGLE_SUM'],2):>2}\n        ARW: {np.round(rim_area_disc_area,2):>6.2f}"
+        i += 1
+        plt.subplot(nrows, ncols, i)
+        plt.imshow(display_rim_true)
+        plt.axis('off')
+        plt.title(title,**mono_font)
+
+        # Model
+        rim_area_disc_area_model = results['RIM_AREA'] / results['DISC_AREA']
+        if results['TYPE'] == "Connected":
+            title = f" Rim/Disc: {np.round(results['RIM_DISC_RATIO'],2):.2f}\n      ARW: {np.round(rim_area_disc_area,2):.2f}"
+        else:
+            title = f"Rim Angle: {np.round(results['ANGLE_SUM'],2):>2}\n        ARW: {np.round(rim_area_disc_area_model,2):>6.2f}"
+        i += 1
+        plt.subplot(nrows, ncols, i)
+        plt.imshow(display_rim)
+        plt.axis('off')
+        plt.title(title,**mono_font)
+
+        plt.tight_layout()
+        fig.set_size_inches(8, 6)
+        fig.savefig('..//images//20220426-062458-Rim-multiclass_best//rdr angle radar//'+results['IMAGE'],
+                    bbox_inches='tight',
+                    pad_inches=.1,
+                    dpi=300)
+        plt.close(fig)
+        #########################
+
+        #########################
+        # Image Disc, Rim/Disc, Angle, DDLS
+        nrows = 1
+        ncols = 3
+        i = 0
+        fig, ax = plt.subplots(nrows=nrows, ncols=ncols)
+
+        # Raw
+        i += 1
+        plt.subplot(nrows, ncols, i)
+        plt.imshow(cv2.imread(img_path)[:, :, ::-1])
+        plt.axis('off')
+        plt.title('')
+
+        # Clinician
         disc_size = ""
         if results_true['DISC_SIZE'] == 1:
             disc_size = "Small Disc"
@@ -782,29 +795,21 @@ for i, index_row in enumerate(df_images.iterrows()):
         elif results_true['DISC_SIZE'] == 3:
             disc_size = "Large Disc"
 
-        # if results_true['TYPE'] == "Connected":
-        #     title = f"{disc_size}  Rim/Disc: {np.round(results_true['RIM_DISC_RATIO'],2)}  DDLS: {results_true['DDLS_SCORE']}"
-        # elif results_true['TYPE'] == "Disconnected":
-        #     title = f"{disc_size}  Angle: {np.round(results_true['ANGLE_SUM'],2)}  DDLS: {results_true['DDLS_SCORE']}"
-
+        title_center = ""
         if results_true['TYPE'] == "Connected":
-            title = f"Clinician Rim/Disc: {np.round(results_true['RIM_DISC_RATIO'],2)}"
-        elif results_true['TYPE'] == "Disconnected":
-            title = f"Clinician Angle: {np.round(results_true['ANGLE_SUM'],2)}"
+            title_center = f"Rim/Disc: {np.round(results_true['RIM_DISC_RATIO'],2):.2f}"
+        else:
+            title_center = "Angle: " + str(np.round(results_true['ANGLE_SUM'],2))
+
+        title = f"{disc_size:<16}{title_center:<17}DDLS: {results_true['DDLS_SCORE']:<2}"
+
         i += 1
         plt.subplot(nrows, ncols, i)
         plt.imshow(display_rim_true)
         plt.axis('off')
-        plt.title(title)
+        plt.title(title, fontsize=8)
 
-        # Rim predicted raw
-        i += 1
-        plt.subplot(nrows, ncols, i)
-        plt.imshow(predicted_rim_for_output, cmap='gray')
-        plt.axis('off')
-        plt.title(f'Predicted Rim, IoU: {np.round(results["RIM_IOU"], 2)}')
-
-        # Rim Predicated
+        # Model
         disc_size = ""
         if results['DISC_SIZE'] == 1:
             disc_size = "Small Disc"
@@ -813,28 +818,28 @@ for i, index_row in enumerate(df_images.iterrows()):
         elif results['DISC_SIZE'] == 3:
             disc_size = "Large Disc"
 
-        # if results['TYPE'] == "Connected":
-        #     title = f"{disc_size}  Rim/Disc: {np.round(results['RIM_DISC_RATIO'],2)}  DDLS: {results['DDLS_SCORE']}"
-        # elif results['TYPE'] == "Disconnected":
-        #     title = f"{disc_size}  Angle: {np.round(results['ANGLE_SUM'],2)}  DDLS: {results['DDLS_SCORE']}"
+        title_center = ""
         if results['TYPE'] == "Connected":
-            title = f"Predicted Rim/Disc: {np.round(results['RIM_DISC_RATIO'],2)}"
-        elif results['TYPE'] == "Disconnected":
-            title = f"Predicted  Angle: {np.round(results['ANGLE_SUM'],2)}"
+            title_center = f"Rim/Disc: {np.round(results['RIM_DISC_RATIO'],2):.2f}"
+        else:
+            title_center = "Angle: " + str(np.round(results['ANGLE_SUM'],2))
+
+        title = f"{disc_size:<16}{title_center:<17}DDLS: {results['DDLS_SCORE']:<2}"
+
         i += 1
         plt.subplot(nrows, ncols, i)
         plt.imshow(display_rim)
         plt.axis('off')
-        plt.title(title)
+        plt.title(title, fontsize=8)
 
         plt.tight_layout()
         fig.set_size_inches(8, 6)
-        fig.savefig(row['DDLS_IMAGE_STEPS'],
+        fig.savefig('..//images//20220426-062458-Rim-multiclass_best//ddls//'+results['GROUP']+"//"+results['IMAGE'],
                     bbox_inches='tight',
                     pad_inches=.1,
                     dpi=300)
         plt.close(fig)
-
+        #########################
     #################
 
     #################
@@ -843,70 +848,4 @@ for i, index_row in enumerate(df_images.iterrows()):
     df_results = df_results.append(results, ignore_index=True)
 
     df_results.to_csv(results_save_path, mode='a', header=False, index=False)
-    #################
-
-    #################
-    # Save image
-    if 'DDLS_IMAGE' in df_images.columns:
-        nrows = 1
-        ncols = 3
-        i = 0
-        fig, ax = plt.subplots(nrows=nrows, ncols=ncols)
-        i += 1
-        plt.subplot(nrows, ncols, i)
-        plt.imshow(img_raw)
-        plt.axis('off')
-        plt.title(" ")
-
-        # Rim True
-        disc_size = ""
-        if results_true['DISC_SIZE'] == 1:
-            disc_size = "Small Disc"
-        elif results_true['DISC_SIZE'] == 2:
-            disc_size = "Average Disc"
-        elif results_true['DISC_SIZE'] == 3:
-            disc_size = "Large Disc"
-
-        if disc_size == "":
-            print('something weird happened and disk size is empty')
-            print(results_true['DISC_SIZE'])
-        if results_true['DDLS_SCORE'] is None:
-            print('none DDLS?')
-
-        if results_true['TYPE'] == "Connected":
-            title = f"{disc_size}  Rim/Disc: {np.round(results_true['RIM_DISC_RATIO'],2)}  DDLS: {results_true['DDLS_SCORE']}"
-        elif results_true['TYPE'] == "Disconnected":
-            title = f"{disc_size}  Angle: {np.round(results_true['ANGLE_SUM'],2)}  DDLS: {results_true['DDLS_SCORE']}"
-        i += 1
-        plt.subplot(nrows, ncols, i)
-        plt.imshow(display_rim_true)
-        plt.axis('off')
-        plt.title(title, fontsize='small')
-
-        # Rim Predicated
-        disc_size = ""
-        if results['DISC_SIZE'] == 1:
-            disc_size = "Small Disc"
-        elif results['DISC_SIZE'] == 2:
-            disc_size = "Average Disc"
-        elif results['DISC_SIZE'] == 3:
-            disc_size = "Large Disc"
-
-        if results['TYPE'] == "Connected":
-            title = f"{disc_size}  Rim/Disc: {np.round(results['RIM_DISC_RATIO'],2)}  DDLS: {results['DDLS_SCORE']}"
-        elif results['TYPE'] == "Disconnected":
-            title = f"{disc_size}  Angle: {np.round(results['ANGLE_SUM'],2)}  DDLS: {results['DDLS_SCORE']}"
-        i += 1
-        plt.subplot(nrows, ncols, i)
-        plt.imshow(display_rim)
-        plt.axis('off')
-        plt.title(title, fontsize='small')
-
-        plt.tight_layout()
-        fig.set_size_inches(8, 6)
-        fig.savefig(row['DDLS_IMAGE'],
-                    bbox_inches='tight',
-                    pad_inches=.1,
-                    dpi=300)
-        plt.close(fig)
     #################
